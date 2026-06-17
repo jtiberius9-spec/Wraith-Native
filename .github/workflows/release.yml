@@ -13,7 +13,10 @@ permissions:
 jobs:
   build:
     name: Build & Release (Windows x64)
-    runs-on: windows-latest
+    # Pinned: the upstream build script + VS Enterprise paths assume the
+    # VS2022 runner image. windows-latest (now Server 2025) breaks CMake's
+    # "Visual Studio 17 2022" generator lookup.
+    runs-on: windows-2022
     env:
       TARGET_NAME: Wraith
       QT_VER: 5.15.2
