@@ -1,4 +1,5 @@
 // #include <QDesktopWidget>
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QLabel>
 #include <QMessageBox>
@@ -19,11 +20,26 @@
 
 #include "config.h"
 #include "iconhelper.h"
+#include "keymapeditor.h"
 #include "qyuvopenglwidget.h"
 #include "toolform.h"
 #include "mousetap/mousetap.h"
 #include "ui_videoform.h"
 #include "videoform.h"
+
+namespace
+{
+    // Default keymap-edit-mode banner hint. Shown whenever the editor isn't
+    // prompting for a specific key capture.
+    QString kEditBannerHint()
+    {
+        return QCoreApplication::translate(
+            "VideoForm",
+            "EDIT MODE  \xE2\x80\x94  F10 to exit,  Ctrl+S to save  \xE2\x80\x94  "
+            "drag a palette button onto the video to add,  drag markers to move,  "
+            "double-click a marker to rebind,  Delete to remove");
+    }
+}
 
 VideoForm::VideoForm(bool framelessWindow, bool skin, bool showToolbar, QWidget *parent) : QWidget(parent), ui(new Ui::videoForm), m_skin(skin)
 {
@@ -234,15 +250,38 @@ void VideoForm::installShortcut()
         device->postGoBack();
     });
 
-    // postAppSwitch
+    // postAppSwitch / save-keymap (when in edit mode)
     shortcut = new QShortcut(QKeySequence("Ctrl+s"), this);
     shortcut->setAutoRepeat(false);
     connect(shortcut, &QShortcut::activated, this, [this]() {
+        // While editing the keymap, Ctrl+S saves the keymap instead of
+        // sending the app-switch key to the device.
+        if (m_editMode) {
+            saveKeymapEdits();
+            return;
+        }
         auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
         if (!device) {
             return;
         }
         emit device->postAppSwitch();
+    });
+
+    // toggle keymap edit mode
+    shortcut = new QShortcut(QKeySequence("F10"), this);
+    shortcut->setAutoRepeat(false);
+    connect(shortcut, &QShortcut::activated, this, [this]() { toggleKeymapEditMode(); });
+
+    // toggle screen recording (Wraith F12). Distinct from F10 (keymap editor):
+    // this just asks the Dialog to start/stop recording for this device.
+    shortcut = new QShortcut(QKeySequence("F12"), this);
+    shortcut->setAutoRepeat(false);
+    connect(shortcut, &QShortcut::activated, this, [this]() {
+        // Don't toggle recording while editing the keymap overlay.
+        if (m_editMode) {
+            return;
+        }
+        emit toggleRecordRequested(m_serial);
     });
 
     // postGoMenu
@@ -521,6 +560,182 @@ bool VideoForm::isHost()
     return m_toolForm->isHost();
 }
 
+void VideoForm::setKeyMapFile(const QString &keyMapFile)
+{
+    m_keyMapFile = keyMapFile;
+}
+
+void VideoForm::updateKeymapEditorGeometry()
+{
+    if (!m_keymapEditor || !m_videoWidget) {
+        return;
+    }
+    // The KeepRatioWidget letterboxes m_videoWidget so its geometry is exactly
+    // the displayed video rect. The overlay fills that rect (it is parented to
+    // the video widget, so a (0,0)-origin same-size geometry is correct).
+    m_keymapEditor->setGeometry(QRect(QPoint(0, 0), m_videoWidget->size()));
+    if (m_editBanner) {
+        m_editBanner->setGeometry(0, 0, m_videoWidget->width(), 28);
+    }
+}
+
+void VideoForm::toggleKeymapEditMode()
+{
+    if (m_editMode) {
+        exitKeymapEditMode();
+    } else {
+        enterKeymapEditMode();
+    }
+}
+
+void VideoForm::enterKeymapEditMode()
+{
+    if (m_editMode) {
+        return;
+    }
+    if (!m_videoWidget || m_videoWidget->isHidden()) {
+        return;
+    }
+    if (m_keyMapFile.isEmpty()) {
+        QMessageBox::information(this, "Wraith",
+                                 tr("No keymap selected.\nPick a keymap in the main window first."),
+                                 QMessageBox::Ok);
+        return;
+    }
+
+    if (!m_keymapEditor) {
+        m_keymapEditor = new KeymapEditor(m_videoWidget, m_videoWidget);
+        connect(m_keymapEditor, &KeymapEditor::saved, this, [this](const QString &jsonText) {
+            // Live-reload into the running device if possible; otherwise the
+            // banner note tells the user to reconnect.
+            auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+            if (device) {
+                device->updateScript(jsonText);
+            }
+        });
+        // Reflect the editor's capture prompts (bind key, steer-wheel
+        // directions, rebind) in the banner; empty restores the default hint.
+        connect(m_keymapEditor, &KeymapEditor::promptChanged, this, [this](const QString &prompt) {
+            if (!m_editMode || !m_editBanner) {
+                return;
+            }
+            if (prompt.isEmpty()) {
+                m_editBanner->setText(kEditBannerHint());
+            } else {
+                m_editBanner->setText(prompt);
+            }
+        });
+        // Switching/creating a keymap from the editor's chooser: remember it as
+        // the current keymap and live-apply it to the running device.
+        connect(m_keymapEditor, &KeymapEditor::keymapSwitched, this,
+                [this](const QString &filePath, const QString &jsonText) {
+            m_keyMapFile = filePath;
+            auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+            if (device) {
+                device->updateScript(jsonText);
+            }
+        });
+    }
+
+    if (!m_keymapEditor->loadFromFile(m_keyMapFile)) {
+        // loadFromFile shows its own error hint; still enter edit mode so the
+        // user sees the message rather than a silent no-op.
+    }
+
+    if (!m_editBanner) {
+        m_editBanner = new QLabel(m_videoWidget);
+        m_editBanner->setAlignment(Qt::AlignCenter);
+        m_editBanner->setStyleSheet(R"(QLabel {
+            background-color: rgba(20, 20, 20, 180);
+            color: #FFD700;
+            font-weight: bold;
+            padding: 4px;
+        })");
+        m_editBanner->setText(kEditBannerHint());
+    }
+
+    m_editMode = true;
+    updateKeymapEditorGeometry();
+    m_editBanner->show();
+    m_editBanner->raise();
+    m_keymapEditor->show();
+    m_keymapEditor->raise();
+    m_keymapEditor->setFocus();
+    // The palette + properties live in a SEPARATE floating tool window so the
+    // whole video stays free for placing nodes. Park it next to this window.
+    m_keymapEditor->showToolWindow(window());
+    update();
+}
+
+void VideoForm::exitKeymapEditMode()
+{
+    if (!m_editMode) {
+        return;
+    }
+    m_editMode = false;
+    if (m_keymapEditor) {
+        m_keymapEditor->hide();
+        m_keymapEditor->hideToolWindow();
+    }
+    if (m_editBanner) {
+        m_editBanner->hide();
+    }
+    setFocus();
+    update();
+}
+
+void VideoForm::saveKeymapEdits()
+{
+    if (!m_editMode || !m_keymapEditor) {
+        return;
+    }
+    const QString text = m_keymapEditor->saveToFile();
+    if (text.isNull()) {
+        return;
+    }
+    // Briefly reflect the save in the banner.
+    if (m_editBanner) {
+        auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+        if (device) {
+            m_editBanner->setText(tr("SAVED  —  applied to live session  (F10 to exit)"));
+        } else {
+            m_editBanner->setText(tr("SAVED  —  reconnect to apply  (F10 to exit)"));
+        }
+        QTimer::singleShot(2000, this, [this]() {
+            if (m_editMode && m_editBanner) {
+                m_editBanner->setText(kEditBannerHint());
+            }
+        });
+    }
+}
+
+void VideoForm::setRecordingIndicator(bool recording)
+{
+    if (recording) {
+        if (!m_videoWidget) {
+            return;
+        }
+        if (!m_recIndicator) {
+            m_recIndicator = new QLabel(m_videoWidget);
+            m_recIndicator->setText(QStringLiteral("\xE2\x97\x8F REC"));   // "● REC"
+            m_recIndicator->setStyleSheet(R"(QLabel {
+                background-color: rgba(20, 20, 20, 160);
+                color: #FF3B30;
+                font-weight: bold;
+                padding: 3px 6px;
+                border-radius: 4px;
+            })");
+            m_recIndicator->adjustSize();
+        }
+        // top-right corner of the video widget
+        m_recIndicator->move(qMax(0, m_videoWidget->width() - m_recIndicator->width() - 8), 8);
+        m_recIndicator->show();
+        m_recIndicator->raise();
+    } else if (m_recIndicator) {
+        m_recIndicator->hide();
+    }
+}
+
 void VideoForm::updateFPS(quint32 fps)
 {
     //qDebug() << "FPS:" << fps;
@@ -558,6 +773,22 @@ void VideoForm::staysOnTop(bool top)
 
 void VideoForm::mousePressEvent(QMouseEvent *event)
 {
+    // In keymap edit mode, mouse-over-video goes to the editor overlay (which
+    // is raised above the video). Any press that reaches VideoForm is outside
+    // the video rect and should only drive window dragging.
+    if (m_editMode) {
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+        QPointF globalPos = event->globalPos();
+#else
+        QPointF globalPos = event->globalPosition();
+#endif
+        if (event->button() == Qt::LeftButton && !m_videoWidget->geometry().contains(event->pos())) {
+            m_dragPosition = globalPos.toPoint() - frameGeometry().topLeft();
+            event->accept();
+        }
+        return;
+    }
+
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (event->button() == Qt::MiddleButton) {
         if (device && !device->isCurrentCustomKeymap()) {
@@ -606,6 +837,13 @@ void VideoForm::mousePressEvent(QMouseEvent *event)
 
 void VideoForm::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_editMode) {
+        // Only finishing a window drag is meaningful here.
+        m_dragPosition = QPoint(0, 0);
+        event->accept();
+        return;
+    }
+
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (m_dragPosition.isNull()) {
         if (!device) {
@@ -648,6 +886,14 @@ void VideoForm::mouseMoveEvent(QMouseEvent *event)
         QPointF localPos = event->position();
         QPointF globalPos = event->globalPosition();
 #endif
+    if (m_editMode) {
+        // Only window dragging is allowed; do not forward moves to the device.
+        if (!m_dragPosition.isNull() && (event->buttons() & Qt::LeftButton)) {
+            move(globalPos.toPoint() - m_dragPosition);
+            event->accept();
+        }
+        return;
+    }
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (m_videoWidget->geometry().contains(event->pos())) {
         if (!device) {
@@ -696,6 +942,10 @@ void VideoForm::mouseDoubleClickEvent(QMouseEvent *event)
 
 void VideoForm::wheelEvent(QWheelEvent *event)
 {
+    if (m_editMode) {
+        event->accept();
+        return;
+    }
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
 #if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
     if (m_videoWidget->geometry().contains(event->position().toPoint())) {
@@ -722,6 +972,15 @@ void VideoForm::wheelEvent(QWheelEvent *event)
 
 void VideoForm::keyPressEvent(QKeyEvent *event)
 {
+    if (m_editMode) {
+        // Edit mode swallows keys (the editor overlay handles its own keys;
+        // F10/Ctrl+S are global shortcuts). Nothing goes to the device.
+        if (Qt::Key_Escape == event->key() && !event->isAutoRepeat()) {
+            toggleKeymapEditMode();
+        }
+        event->accept();
+        return;
+    }
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (!device) {
         return;
@@ -735,6 +994,10 @@ void VideoForm::keyPressEvent(QKeyEvent *event)
 
 void VideoForm::keyReleaseEvent(QKeyEvent *event)
 {
+    if (m_editMode) {
+        event->accept();
+        return;
+    }
     auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
     if (!device) {
         return;
@@ -789,6 +1052,11 @@ void VideoForm::resizeEvent(QResizeEvent *event)
             setMinimumWidth(0);
         }
     }
+
+    // Keep the keymap-editor overlay aligned with the (letterboxed) video rect.
+    if (m_editMode) {
+        updateKeymapEditorGeometry();
+    }
 }
 
 void VideoForm::closeEvent(QCloseEvent *event)
@@ -831,7 +1099,7 @@ void VideoForm::dropEvent(QDropEvent *event)
         QFileInfo fileInfo(file);
 
         if (!fileInfo.exists()) {
-            QMessageBox::warning(this, "QtScrcpy", tr("file does not exist"), QMessageBox::Ok);
+            QMessageBox::warning(this, "Wraith", tr("file does not exist"), QMessageBox::Ok);
             continue;
         }
 

@@ -15,3 +15,5 @@ build-*
 userdata.ini
 Info_Mac.plist
 /ci/build_temp
+/build_wraith/
+/build_x64/

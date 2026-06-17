@@ -1,0 +1,86 @@
+name: Release Wraith (Windows x64)
+
+# Push a version tag (e.g. v0.5.0) and this builds + publishes a GitHub Release.
+# Manual run (workflow_dispatch) just builds an artifact without releasing.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write          # required so the workflow can create the Release
+
+jobs:
+  build:
+    name: Build & Release (Windows x64)
+    runs-on: windows-latest
+    env:
+      TARGET_NAME: Wraith
+      QT_VER: 5.15.2
+      QT_ARCH: win64_msvc2019_64
+      # windows-latest currently ships VS2022 Enterprise (path may shift over time)
+      ENV_VCVARSALL: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat'
+      ENV_VCINSTALL: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC'
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install Qt ${{ env.QT_VER }}
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VER }}
+          target: desktop
+          arch: ${{ env.QT_ARCH }}
+          cache: true
+
+      # build_for_win.bat / publish_for_win.bat expect ENV_QT_PATH to be the
+      # folder that CONTAINS msvc2019_64. install-qt-action sets QT_ROOT_DIR to
+      # .../<ver>/msvc2019_64, so we take its parent.
+      - name: Resolve Qt path
+        shell: cmd
+        run: |
+          for %%I in ("%QT_ROOT_DIR%\..") do echo ENV_QT_PATH=%%~fI>>"%GITHUB_ENV%"
+
+      - name: Compute version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build (MSVC x64)
+        shell: cmd
+        run: |
+          call python ci\generate-version.py
+          call "ci\win\build_for_win.bat" RelWithDebInfo x64
+
+      - name: Package
+        id: pkg
+        shell: cmd
+        run: |
+          set "PUBNAME=%TARGET_NAME%-win-x64-${{ steps.ver.outputs.version }}"
+          call "ci\win\publish_for_win.bat" x64 ..\build\%PUBNAME%
+          echo pubname=%PUBNAME%>>"%GITHUB_OUTPUT%"
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path "ci\build\${{ steps.pkg.outputs.pubname }}" -DestinationPath "ci\build\${{ steps.pkg.outputs.pubname }}.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.pubname }}
+          path: ci/build/${{ steps.pkg.outputs.pubname }}.zip
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ci/build/${{ steps.pkg.outputs.pubname }}.zip
+          generate_release_notes: true

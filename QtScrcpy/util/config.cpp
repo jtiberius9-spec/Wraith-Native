@@ -63,6 +63,15 @@
 #define COMMON_LOCK_ORIENTATION_INDEX_KEY "LockDirectionIndex"
 #define COMMON_LOCK_ORIENTATION_INDEX_DEF 0
 
+#define COMMON_VIDEO_CODEC_INDEX_KEY "VideoCodecIndex"
+#define COMMON_VIDEO_CODEC_INDEX_DEF 0
+
+#define COMMON_GAME_SCRIPT_KEY "GameScript"
+#define COMMON_GAME_SCRIPT_DEF ""
+
+#define COMMON_MIC_GAIN_KEY "MicGain"
+#define COMMON_MIC_GAIN_DEF 5.0
+
 #define COMMON_RECORD_SCREEN_KEY "RecordScreen"
 #define COMMON_RECORD_SCREEN_DEF false
 
@@ -168,6 +177,9 @@ void Config::setUserBootConfig(const UserBootConfig &config)
     m_userData->setValue(COMMON_RECORD_FORMAT_INDEX_KEY, config.recordFormatIndex);
     m_userData->setValue(COMMON_FRAMELESS_WINDOW_KEY, config.framelessWindow);
     m_userData->setValue(COMMON_LOCK_ORIENTATION_INDEX_KEY, config.lockOrientationIndex);
+    m_userData->setValue(COMMON_VIDEO_CODEC_INDEX_KEY, config.videoCodecIndex);
+    m_userData->setValue(COMMON_GAME_SCRIPT_KEY, config.gameScript);
+    m_userData->setValue(COMMON_MIC_GAIN_KEY, config.micGain);
     m_userData->setValue(COMMON_RECORD_SCREEN_KEY, config.recordScreen);
     m_userData->setValue(COMMON_RECORD_BACKGROUD_KEY, config.recordBackground);
     m_userData->setValue(COMMON_REVERSE_CONNECT_KEY, config.reverseConnect);
@@ -191,6 +203,9 @@ UserBootConfig Config::getUserBootConfig()
     config.maxSizeIndex = m_userData->value(COMMON_MAX_SIZE_INDEX_KEY, COMMON_MAX_SIZE_INDEX_DEF).toInt();
     config.recordFormatIndex = m_userData->value(COMMON_RECORD_FORMAT_INDEX_KEY, COMMON_RECORD_FORMAT_INDEX_DEF).toInt();
     config.lockOrientationIndex = m_userData->value(COMMON_LOCK_ORIENTATION_INDEX_KEY, COMMON_LOCK_ORIENTATION_INDEX_DEF).toInt();
+    config.videoCodecIndex = m_userData->value(COMMON_VIDEO_CODEC_INDEX_KEY, COMMON_VIDEO_CODEC_INDEX_DEF).toInt();
+    config.gameScript = m_userData->value(COMMON_GAME_SCRIPT_KEY, COMMON_GAME_SCRIPT_DEF).toString();
+    config.micGain = m_userData->value(COMMON_MIC_GAIN_KEY, COMMON_MIC_GAIN_DEF).toDouble();
     config.framelessWindow = m_userData->value(COMMON_FRAMELESS_WINDOW_KEY, COMMON_FRAMELESS_WINDOW_DEF).toBool();
     config.recordScreen = m_userData->value(COMMON_RECORD_SCREEN_KEY, COMMON_RECORD_SCREEN_DEF).toBool();
     config.recordBackground = m_userData->value(COMMON_RECORD_BACKGROUD_KEY, COMMON_RECORD_BACKGROUD_DEF).toBool();
@@ -380,6 +395,11 @@ QString Config::getTitle()
     m_settings->beginGroup(GROUP_COMMON);
     title = m_settings->value(COMMON_TITLE_KEY, COMMON_TITLE_DEF).toString();
     m_settings->endGroup();
+    // ignore a stale stored "QtScrcpy" title (from pre-rebrand configs) so the
+    // window always shows the current app name (Wraith).
+    if (title.isEmpty() || title == "QtScrcpy") {
+        title = QCoreApplication::applicationName();
+    }
     return title;
 }
 

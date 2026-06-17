@@ -75,7 +75,7 @@ xcopy %keymap_path% %publish_path%keymap\ /E /Y
 xcopy %config_path% %publish_path%config\ /E /Y
 
 :: 添加qt依赖包
-windeployqt %publish_path%\QtScrcpy.exe
+windeployqt %publish_path%\Wraith.exe
 
 :: 删除多余qt依赖包
 rmdir /s/q %publish_path%\iconengines

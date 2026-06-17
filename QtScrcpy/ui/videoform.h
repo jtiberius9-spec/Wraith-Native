@@ -15,6 +15,7 @@ class ToolForm;
 class FileHandler;
 class QYUVOpenGLWidget;
 class QLabel;
+class KeymapEditor;
 class VideoForm : public QWidget, public qsc::DeviceObserver
 {
     Q_OBJECT
@@ -34,6 +35,18 @@ public:
     void switchFullScreen();
     bool isHost();
 
+    // Keymap editor (overlay) support.
+    void setKeyMapFile(const QString &keyMapFile);
+    void toggleKeymapEditMode();
+
+    // Recording indicator (driven by Dialog in response to toggleRecordRequested).
+    void setRecordingIndicator(bool recording);
+
+signals:
+    // Emitted on F12: ask the owner (Dialog) to toggle screen recording for this
+    // device. Kept distinct from the F10 keymap-editor toggle.
+    void toggleRecordRequested(const QString &serial);
+
 private:
     void onFrame(int width, int height, uint8_t* dataY, uint8_t* dataU, uint8_t* dataV,
                  int linesizeY, int linesizeU, int linesizeV) override;
@@ -48,6 +61,11 @@ private:
     void moveCenter();
     void installShortcut();
     QRect getScreenRect();
+
+    void enterKeymapEditMode();
+    void exitKeymapEditMode();
+    void saveKeymapEdits();
+    void updateKeymapEditorGeometry();
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -75,6 +93,15 @@ private:
     QPointer<QWidget> m_loadingWidget;
     QPointer<QYUVOpenGLWidget> m_videoWidget;
     QPointer<QLabel> m_fpsLabel;
+
+    // keymap editor overlay
+    QPointer<KeymapEditor> m_keymapEditor;
+    QPointer<QLabel> m_editBanner;
+    bool m_editMode = false;
+    QString m_keyMapFile;
+
+    // recording indicator overlay ("● REC")
+    QPointer<QLabel> m_recIndicator;
 
     //inside member
     QSize m_frameSize;

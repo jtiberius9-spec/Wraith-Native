@@ -8,11 +8,14 @@
 #include <QSystemTrayIcon>
 #include <QListWidget>
 #include <QTimer>
+#include <QDoubleSpinBox>
+#include <QComboBox>
 
 
 #include "adbprocess.h"
 #include "../QtScrcpyCore/include/QtScrcpyCore.h"
 #include "audio/audiooutput.h"
+#include "audio/pcmic.h"
 
 namespace Ui
 {
@@ -35,6 +38,9 @@ public:
 private slots:
     void onDeviceConnected(bool success, const QString& serial, const QString& deviceName, const QSize& size);
     void onDeviceDisconnected(QString serial);
+
+    // F12 toggle from a VideoForm: start/stop recording for that device.
+    void onToggleRecordRequested(const QString &serial);
 
     void on_updateDevice_clicked();
     void on_startServerBtn_clicked();
@@ -59,13 +65,9 @@ private slots:
     void on_useSingleModeCheck_clicked();
     void on_serialBox_currentIndexChanged(const QString &arg1);
 
-    void on_startAudioBtn_clicked();
-
-    void on_stopAudioBtn_clicked();
-
-    void on_installSndcpyBtn_clicked();
-
     void on_autoUpdatecheckBox_toggled(bool checked);
+
+    void checkForUpdate();
 
     void showIpEditMenu(const QPoint &pos);
 
@@ -99,6 +101,25 @@ private:
     QAction *m_quit;
     AudioOutput m_audioOutput;
     QTimer m_autoUpdatetimer;
+
+    // Mic-gain control for the record mux: boosts the (quiet laptop) PC mic
+    // relative to the game audio before amix. Created programmatically in initUI().
+    QPointer<QDoubleSpinBox> m_micGainBox;
+
+    // Video codec selector (H.265 default / H.264). Created programmatically in initUI().
+    QPointer<QComboBox> m_videoCodecBox;
+
+    // Recording-with-audio orchestration (mux game audio + PC mic into the MP4).
+    PCMic m_pcMic;
+    bool m_recActive = false;             // a recording-with-audio session is live
+    QString m_recPath;                    // record folder for this session
+    QString m_recSerial;                  // device serial for this session
+    QString m_recFormat;                  // recorder file format (e.g. mp4)
+    QString m_recGamePcm;                 // temp game-audio pcm path
+    QString m_recMicPcm;                  // temp mic pcm path
+
+    // Locate the freshly-written video file and mux audio into it.
+    void muxRecording();
 };
 
 #endif // DIALOG_H

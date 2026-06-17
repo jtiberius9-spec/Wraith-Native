@@ -4,7 +4,30 @@
 #include <QKeyEvent>
 #include <QRandomGenerator>
 #include <QTime>
+#include <QDateTime>
 #include <QTimer>
+#include <QPushButton>
+#include <QLabel>
+#include <QDoubleSpinBox>
+#include <QComboBox>
+#include <QHBoxLayout>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QMessageBox>
+#include <QProcess>
+#include <QDir>
+#include <QFileInfo>
+#include <QElapsedTimer>
+#include <QThread>
+#include <QProgressDialog>
+#include <QCoreApplication>
+#include <QUrl>
+#include <QBoxLayout>
+#include <QEventLoop>
 
 #include "config.h"
 #include "dialog.h"
@@ -191,6 +214,65 @@ void Dialog::initUI()
         connect(ui->devicePortEdt->lineEdit(), &QWidget::customContextMenuRequested,
                 this, &Dialog::showPortEditMenu);
     }
+
+    // Self-update button, added next to the WIFI/USB connect buttons.
+    QPushButton *updateBtn = new QPushButton(tr("Update"), this);
+    updateBtn->setObjectName("updateBtn");
+    // The wifi/usb connect buttons live in the layout named "horizontalLayout_9".
+    QBoxLayout *connectLayout = findChild<QBoxLayout *>("horizontalLayout_9");
+    if (connectLayout) {
+        connectLayout->addWidget(updateBtn);
+    } else if (ui->usbConnectBtn->parentWidget() && ui->usbConnectBtn->parentWidget()->layout()) {
+        // Fallback: append to whatever layout manages the connect button's parent widget.
+        ui->usbConnectBtn->parentWidget()->layout()->addWidget(updateBtn);
+    }
+    connect(updateBtn, &QPushButton::clicked, this, &Dialog::checkForUpdate);
+
+    // Mic-gain control: boosts the (quiet laptop) PC mic relative to the game
+    // audio in the record mux. Added next to the Update button on the same row.
+    QLabel *micGainLabel = new QLabel(tr("Mic gain"), this);
+    micGainLabel->setObjectName("micGainLabel");
+    m_micGainBox = new QDoubleSpinBox(this);
+    m_micGainBox->setObjectName("micGainBox");
+    m_micGainBox->setRange(1.0, 12.0);
+    m_micGainBox->setSingleStep(0.5);
+    m_micGainBox->setValue(5.0);
+    m_micGainBox->setSuffix("x");
+    m_micGainBox->setToolTip(tr("Boost the PC mic relative to game audio in screen recordings."));
+    if (connectLayout) {
+        connectLayout->addWidget(micGainLabel);
+        connectLayout->addWidget(m_micGainBox);
+    } else if (ui->usbConnectBtn->parentWidget() && ui->usbConnectBtn->parentWidget()->layout()) {
+        // Fallback: append to whatever layout manages the connect button's parent widget.
+        ui->usbConnectBtn->parentWidget()->layout()->addWidget(micGainLabel);
+        ui->usbConnectBtn->parentWidget()->layout()->addWidget(m_micGainBox);
+    }
+
+    // Video codec selector: H.265 (lighter on the phone) by default, H.264 for
+    // wider compatibility. Inserted at the top of the Start Config group. The
+    // value is applied from config in updateBootConfig() and read at connect time.
+    {
+        QWidget *codecRow = new QWidget(this);
+        QHBoxLayout *codecLayout = new QHBoxLayout(codecRow);
+        codecLayout->setContentsMargins(0, 0, 0, 0);
+        QLabel *codecLabel = new QLabel(tr("video codec:"), codecRow);
+        m_videoCodecBox = new QComboBox(codecRow);
+        m_videoCodecBox->setObjectName("videoCodecBox");
+        m_videoCodecBox->addItem("H.265 / HEVC");
+        m_videoCodecBox->addItem("H.264 / AVC");
+        m_videoCodecBox->setToolTip(tr("H.265 is lighter on the phone; H.264 is more compatible. Applies on next connect."));
+        codecLayout->addWidget(codecLabel);
+        codecLayout->addWidget(m_videoCodecBox);
+        codecLayout->addStretch();
+        if (QBoxLayout *cfgLayout = qobject_cast<QBoxLayout *>(ui->configGroupBox->layout())) {
+            cfgLayout->insertWidget(0, codecRow);
+        }
+    }
+
+    // Populate the keymap list at startup so a keymap is always available (for
+    // the F10 editor and at connect). updateBootConfig() then restores the
+    // saved choice; otherwise the first keymap is selected by default.
+    on_refreshGameScriptBtn_clicked();
 }
 
 void Dialog::updateBootConfig(bool toView)
@@ -212,6 +294,12 @@ void Dialog::updateBootConfig(bool toView)
         ui->formatBox->setCurrentIndex(config.recordFormatIndex);
         ui->recordPathEdt->setText(config.recordPath);
         ui->lockOrientationBox->setCurrentIndex(config.lockOrientationIndex);
+        if (m_videoCodecBox) {
+            m_videoCodecBox->setCurrentIndex(config.videoCodecIndex);
+        }
+        if (m_micGainBox) {
+            m_micGainBox->setValue(config.micGain);
+        }
         ui->framelessCheck->setChecked(config.framelessWindow);
         ui->recordScreenCheck->setChecked(config.recordScreen);
         ui->notDisplayCheck->setChecked(config.recordBackground);
@@ -223,6 +311,16 @@ void Dialog::updateBootConfig(bool toView)
         ui->useSingleModeCheck->setChecked(config.simpleMode);
         ui->autoUpdatecheckBox->setChecked(config.autoUpdateDevice);
         ui->showToolbar->setChecked(config.showToolbar);
+        // Restore the last-used keymap; fall back to the first available so a
+        // keymap is always selected (otherwise F10 reports "No keymap selected").
+        {
+            int gsIdx = ui->gameBox->findText(config.gameScript);
+            if (gsIdx >= 0) {
+                ui->gameBox->setCurrentIndex(gsIdx);
+            } else if (ui->gameBox->count() > 0) {
+                ui->gameBox->setCurrentIndex(0);
+            }
+        }
     } else {
         UserBootConfig config;
 
@@ -231,6 +329,8 @@ void Dialog::updateBootConfig(bool toView)
         config.recordFormatIndex = ui->formatBox->currentIndex();
         config.recordPath = ui->recordPathEdt->text();
         config.lockOrientationIndex = ui->lockOrientationBox->currentIndex();
+        config.videoCodecIndex = m_videoCodecBox ? m_videoCodecBox->currentIndex() : 0;
+        config.micGain = m_micGainBox ? m_micGainBox->value() : 5.0;
         config.recordScreen = ui->recordScreenCheck->isChecked();
         config.recordBackground = ui->notDisplayCheck->isChecked();
         config.reverseConnect = ui->useReverseCheck->isChecked();
@@ -242,6 +342,7 @@ void Dialog::updateBootConfig(bool toView)
         config.simpleMode = ui->useSingleModeCheck->isChecked();
         config.autoUpdateDevice = ui->autoUpdatecheckBox->isChecked();
         config.showToolbar = ui->showToolbar->isChecked();
+        config.gameScript = ui->gameBox->currentText();
 
         // 保存当前IP到历史记录
         QString currentIp = ui->deviceIpEdt->currentText().trimmed();
@@ -308,6 +409,10 @@ void Dialog::slotActivated(QSystemTrayIcon::ActivationReason reason)
 
 void Dialog::closeEvent(QCloseEvent *event)
 {
+    // The window hides to the tray on close (this is the usual "exit"), so save
+    // settings here — otherwise bitrate/resolution/codec/keymap/mic-gain/etc.
+    // would only persist on an explicit tray "quit".
+    updateBootConfig(false);
     this->hide();
     if (!Config::getInstance().getTrayMessageShown()) {
         Config::getInstance().setTrayMessageShown(true);
@@ -359,6 +464,8 @@ void Dialog::on_startServerBtn_clicked()
     params.logLevel = Config::getInstance().getLogLevel();
     params.codecOptions = Config::getInstance().getCodecOptions();
     params.codecName = Config::getInstance().getCodecName();
+    // H.265 (index 0) by default; H.264 when the user picks index 1.
+    params.videoCodec = (m_videoCodecBox && m_videoCodecBox->currentIndex() == 1) ? "h264" : "h265";
     params.scid = QRandomGenerator::global()->bounded(1, 10000) & 0x7FFFFFFF;
 
     qsc::IDeviceManage::getInstance().connectDevice(params);
@@ -505,9 +612,19 @@ void Dialog::onDeviceConnected(bool success, const QString &serial, const QStrin
     auto videoForm = new VideoForm(ui->framelessCheck->isChecked(), Config::getInstance().getSkin(), ui->showToolbar->isChecked());
     videoForm->setSerial(serial);
 
+    // Tell the video form which keymap file the in-window editor (F10) should
+    // load/save. Matches the keymap the device was started with (gameBox).
+    const QString gameFile = ui->gameBox->currentText().trimmed();
+    if (!gameFile.isEmpty()) {
+        videoForm->setKeyMapFile(getKeyMapPath() + "/" + gameFile);
+    }
+
     qsc::IDeviceManage::getInstance().getDevice(serial)->setUserData(static_cast<void*>(videoForm));
     qsc::IDeviceManage::getInstance().getDevice(serial)->registerDeviceObserver(videoForm);
 
+    // F12 recording toggle: the VideoForm emits this; Dialog owns the recorder +
+    // audio tee/mic + mux orchestration.
+    connect(videoForm, &VideoForm::toggleRecordRequested, this, &Dialog::onToggleRecordRequested);
 
     videoForm->showFPS(ui->fpsCheck->isChecked());
 
@@ -542,10 +659,118 @@ void Dialog::onDeviceConnected(bool success, const QString &serial, const QStrin
 #endif
 
     GroupController::instance().addDevice(serial);
+
+    // Recording is now driven mid-session by F12 (onToggleRecordRequested), which
+    // owns the game-audio tee + PC mic + mux. Here we only auto-start native audio
+    // PLAYBACK together with the mirror (deferred a moment so the video window
+    // appears first; the audio server push/connect blocks briefly).
+    m_recActive = false;
+    QString audioSerial = serial;
+    QTimer::singleShot(300, this, [this, audioSerial]() {
+        m_audioOutput.start(audioSerial, 28200);
+    });
+}
+
+void Dialog::onToggleRecordRequested(const QString &serial)
+{
+    auto device = qsc::IDeviceManage::getInstance().getDevice(serial);
+    if (!device) {
+        return;
+    }
+
+    // resolve this device's video form (for the on-screen REC indicator)
+    VideoForm *vf = nullptr;
+    if (void *data = device->getUserData()) {
+        vf = static_cast<VideoForm *>(data);
+    }
+
+    if (!device->isRecording()) {
+        // ---- START recording ----
+        const QString recPath = ui->recordPathEdt->text().trimmed();
+        if (recPath.isEmpty()) {
+            QMessageBox::warning(this, "Wraith",
+                                 tr("Set a record save path first (Record path)."),
+                                 QMessageBox::Ok);
+            return;
+        }
+        QString fmt = ui->formatBox->currentText().trimmed();
+        if (fmt.isEmpty()) {
+            fmt = "mp4";
+        }
+
+        // build the output path the same way the core recorder used to:
+        // <recordPath>/<serial>_<yyyyMMdd_hhmmss_zzz>.<fmt>
+        QString fileName = serial + QDateTime::currentDateTime().toString("_yyyyMMdd_hhmmss_zzz");
+        fileName.replace(":", "_");
+        fileName.replace(".", "_");
+        fileName += ("." + fmt);
+        QDir dir(recPath);
+        if (!dir.exists()) {
+            dir.mkpath(recPath);
+        }
+        const QString videoPath = dir.absoluteFilePath(fileName);
+
+        if (!device->startRecord(videoPath, fmt)) {
+            QMessageBox::warning(this, "Wraith",
+                                 tr("Could not start recording."),
+                                 QMessageBox::Ok);
+            return;
+        }
+
+        // remember session details for the audio tee + mux on stop
+        m_recActive = true;
+        m_recPath = recPath;
+        m_recSerial = serial;
+        m_recFormat = fmt;
+        m_recGamePcm = QDir(m_recPath).filePath(QString(".wraith_game_%1.pcm").arg(serial));
+        m_recMicPcm = QDir(m_recPath).filePath(QString(".wraith_mic_%1.pcm").arg(serial));
+
+        // start game-audio tee (opens immediately if playback is running) + PC mic
+        m_audioOutput.startTee(m_recGamePcm);
+        m_pcMic.start(m_recMicPcm);   // best-effort: ok if no mic present
+
+        if (vf) {
+            vf->setRecordingIndicator(true);
+        }
+        outLog("recording started: " + videoPath, true);
+    } else {
+        // ---- STOP recording ----
+        device->stopRecord();         // synchronous finalize of the video file
+        m_audioOutput.stopTee();      // close the game-audio tee (keep playback)
+        m_pcMic.stop();               // stop PC mic capture
+
+        if (m_recActive && serial == m_recSerial) {
+            muxRecording();           // mux audio into the just-written video
+        }
+        m_recActive = false;
+
+        if (vf) {
+            vf->setRecordingIndicator(false);
+        }
+        outLog("recording stopped", true);
+    }
 }
 
 void Dialog::onDeviceDisconnected(QString serial)
 {
+    // Safety: if a recording is still live for this device when it disconnects,
+    // finalize it and mux the captured audio. The core also finalizes the video
+    // file during teardown.
+    auto liveDevice = qsc::IDeviceManage::getInstance().getDevice(serial);
+    if (liveDevice && liveDevice->isRecording()) {
+        liveDevice->stopRecord();
+    }
+    // stop the game-audio tee + PC mic (leave native playback to m_audioOutput.stop)
+    m_audioOutput.stopTee();
+    m_pcMic.stop();
+    if (m_recActive && serial == m_recSerial) {
+        muxRecording();
+    }
+    m_recActive = false;
+
+    // stop native audio playback together with the mirror
+    m_audioOutput.stop();
+
     GroupController::instance().removeDevice(serial);
     auto device = qsc::IDeviceManage::getInstance().getDevice(serial);
     if (!device) {
@@ -558,6 +783,165 @@ void Dialog::onDeviceDisconnected(QString serial)
         vf->close();
         vf->deleteLater();
     }
+}
+
+void Dialog::muxRecording()
+{
+    const QString recPath = m_recPath;
+    const QString serial = m_recSerial;
+    QString fmt = m_recFormat;
+    if (fmt.isEmpty()) {
+        fmt = "mp4";
+    }
+    const QString gamePcm = m_recGamePcm;
+    const QString micPcm = m_recMicPcm;
+
+    auto cleanupPcm = [&]() {
+        if (!gamePcm.isEmpty()) QFile::remove(gamePcm);
+        if (!micPcm.isEmpty()) QFile::remove(micPcm);
+    };
+
+    if (recPath.isEmpty() || serial.isEmpty()) {
+        cleanupPcm();
+        return;
+    }
+
+    // Locate the video the core recorder wrote this session:
+    // <recordPath>/<serial>_<timestamp>.<fmt>, newest match. The core finalizes
+    // the file during teardown, so poll until it exists AND its size is stable
+    // (unchanged across ~200ms) for up to ~5s before muxing.
+    QDir dir(recPath);
+    const QStringList nameFilters{ QString("%1_*.%2").arg(serial, fmt) };
+    QString videoFile;
+    qint64 lastSize = -1;
+    QElapsedTimer waitTimer;
+    waitTimer.start();
+    while (waitTimer.elapsed() < 5000) {
+        QFileInfoList matches = dir.entryInfoList(nameFilters, QDir::Files, QDir::Time);
+        if (!matches.isEmpty()) {
+            const QFileInfo& newest = matches.first(); // QDir::Time => newest first
+            const qint64 sz = newest.size();
+            if (sz > 0 && sz == lastSize) {
+                videoFile = newest.absoluteFilePath();
+                break;
+            }
+            lastSize = sz;
+        }
+        QThread::msleep(200);
+        // re-stat on next loop iteration (QFileInfo above is fresh each pass)
+    }
+
+    if (videoFile.isEmpty()) {
+        qWarning() << "muxRecording::could not find/stabilize recorded video for serial" << serial;
+        cleanupPcm();
+        return;
+    }
+
+    // Need at least game audio to mux; if it's missing/empty, leave video as-is.
+    const QFileInfo gameInfo(gamePcm);
+    const bool haveGame = gameInfo.exists() && gameInfo.size() > 0;
+    if (!haveGame) {
+        qWarning() << "muxRecording::no game audio captured, leaving video-only file";
+        cleanupPcm();
+        return;
+    }
+
+    const QFileInfo micInfo(micPcm);
+    const bool haveMic = micInfo.exists() && micInfo.size() > 0;
+
+    // A/V sync: the audio tee + mic started at F12 (t=0), but the video recorder
+    // waited for the next keyframe before writing its first frame (HEVC keyframes
+    // can be several seconds apart). Query the core for that gap and trim the same
+    // number of leading seconds off each audio input so it lines up with video.
+    double skipSec = 0.0;
+    if (auto recDevice = qsc::IDeviceManage::getInstance().getDevice(serial)) {
+        const qint64 skipMs = recDevice->getRecordAudioSkipMs();
+        skipSec = skipMs / 1000.0;
+        qInfo() << "muxRecording::audio A/V-sync skip" << skipMs << "ms (" << skipSec << "s)";
+    }
+    const bool doSkip = skipSec > 0.001;
+    const QString skipStr = QString::number(skipSec, 'f', 3);
+
+    const QString ffmpeg = QCoreApplication::applicationDirPath() + "/ffmpeg.exe";
+    if (!QFile::exists(ffmpeg)) {
+        qWarning() << "muxRecording::ffmpeg.exe not found at" << ffmpeg << "- leaving video-only file";
+        cleanupPcm();
+        return;
+    }
+
+    // mux into a temp file, then atomically replace the original on success.
+    const QString outTmp = videoFile + ".muxtmp." + fmt;
+    QFile::remove(outTmp);
+
+    // -ss placed immediately BEFORE each audio -i is an input option: it discards
+    // the leading skipSec of that PCM so it starts at the video's first frame. The
+    // video input gets NO -ss (it already starts at the first written frame).
+    // Mic-gain multiplier applied to the (quiet) PC mic before amix. Default 5.0
+    // if the spinbox is somehow unavailable.
+    const double micGain = m_micGainBox ? m_micGainBox->value() : 5.0;
+    const QString micGainStr = QString::number(micGain, 'f', 2);
+
+    QStringList args;
+    if (haveMic) {
+        qInfo() << "muxRecording::mic gain" << micGainStr << "x";
+        // video + game(stereo) + boosted mic(mono) -> amix to a single stereo AAC
+        // track, with a limiter to protect against clipping from the boost.
+        const QString micFilter =
+            QString("[2:a]volume=%1[m];[1:a][m]amix=inputs=2:normalize=0:dropout_transition=0[mix];[mix]alimiter=limit=0.95[a]")
+                .arg(micGainStr);
+        args << "-y"
+             << "-i" << videoFile
+             << "-f" << "s16le" << "-ar" << "48000" << "-ac" << "2";
+        if (doSkip) args << "-ss" << skipStr;
+        args << "-i" << gamePcm
+             << "-f" << "s16le" << "-ar" << "48000" << "-ac" << "1";
+        if (doSkip) args << "-ss" << skipStr;
+        args << "-i" << micPcm
+             << "-filter_complex" << micFilter
+             << "-map" << "0:v" << "-map" << "[a]"
+             << "-c:v" << "copy" << "-c:a" << "aac" << "-b:a" << "192k"
+             << outTmp;
+    } else {
+        // no mic: mux just the game audio
+        qInfo() << "muxRecording::no mic audio, muxing game audio only";
+        args << "-y"
+             << "-i" << videoFile
+             << "-f" << "s16le" << "-ar" << "48000" << "-ac" << "2";
+        if (doSkip) args << "-ss" << skipStr;
+        args << "-i" << gamePcm
+             << "-map" << "0:v" << "-map" << "1:a"
+             << "-c:v" << "copy" << "-c:a" << "aac" << "-b:a" << "192k"
+             << outTmp;
+    }
+
+    qInfo() << "muxRecording::running ffmpeg" << args;
+    QProcess mux;
+    mux.start(ffmpeg, args);
+    if (!mux.waitForStarted(5000)) {
+        qWarning() << "muxRecording::ffmpeg failed to start, leaving video-only file";
+        QFile::remove(outTmp);
+        cleanupPcm();
+        return;
+    }
+    // give ffmpeg room to finish (copy video + encode short audio is fast)
+    mux.waitForFinished(120000);
+
+    if (QProcess::NormalExit == mux.exitStatus() && 0 == mux.exitCode()
+        && QFileInfo(outTmp).size() > 0) {
+        // replace the original video file with the muxed one (keep recorder name)
+        if (QFile::remove(videoFile) && QFile::rename(outTmp, videoFile)) {
+            qInfo() << "muxRecording::audio muxed into" << videoFile;
+        } else {
+            qWarning() << "muxRecording::failed to replace original video with muxed file;"
+                       << "muxed output left at" << outTmp;
+        }
+    } else {
+        qWarning() << "muxRecording::ffmpeg failed (exit" << mux.exitCode() << "):"
+                   << mux.readAllStandardError();
+        QFile::remove(outTmp);
+    }
+
+    cleanupPcm();
 }
 
 void Dialog::on_wirelessDisConnectBtn_clicked()
@@ -784,30 +1168,6 @@ const QString &Dialog::getServerPath()
     return serverPath;
 }
 
-void Dialog::on_startAudioBtn_clicked()
-{
-    if (ui->serialBox->count() == 0) {
-        qWarning() << "No device is connected!";
-        return;
-    }
-
-    m_audioOutput.start(ui->serialBox->currentText(), 28200);
-}
-
-void Dialog::on_stopAudioBtn_clicked()
-{
-    m_audioOutput.stop();
-}
-
-void Dialog::on_installSndcpyBtn_clicked()
-{
-    if (ui->serialBox->count() == 0) {
-        qWarning() << "No device is connected!";
-        return;
-    }
-    m_audioOutput.installonly(ui->serialBox->currentText(), 28200);
-}
-
 void Dialog::on_autoUpdatecheckBox_toggled(bool checked)
 {
     if (checked) {
@@ -899,4 +1259,182 @@ void Dialog::showPortEditMenu(const QPoint &pos)
     menu->addAction(clearHistoryAction);
     menu->exec(ui->devicePortEdt->lineEdit()->mapToGlobal(pos));
     delete menu;
+}
+
+// Returns true if remote version (e.g. "0.6.0") is strictly newer than local (e.g. "0.5.0").
+static bool isRemoteNewer(const QString &remote, const QString &local)
+{
+    const QStringList rParts = remote.split('.', Qt::SkipEmptyParts);
+    const QStringList lParts = local.split('.', Qt::SkipEmptyParts);
+    const int count = qMax(rParts.size(), lParts.size());
+    for (int i = 0; i < count; ++i) {
+        const int r = (i < rParts.size()) ? rParts.at(i).toInt() : 0;
+        const int l = (i < lParts.size()) ? lParts.at(i).toInt() : 0;
+        if (r > l) {
+            return true;
+        }
+        if (r < l) {
+            return false;
+        }
+    }
+    return false;
+}
+
+void Dialog::checkForUpdate()
+{
+    // Use the system curl.exe (Windows 10 1803+/11 ship it in System32) for the
+    // HTTPS work. It uses Windows Schannel for TLS, so Wraith needs no OpenSSL
+    // DLLs bundled — Qt 5.15.2 would otherwise require libssl-1_1/libcrypto-1_1.
+    QString curlExe = QDir(QString::fromLocal8Bit(qgetenv("SystemRoot")))
+                          .filePath("System32/curl.exe");
+    if (!QFile::exists(curlExe)) {
+        curlExe = "curl.exe"; // fall back to PATH
+    }
+
+    const QString api = "https://api.github.com/repos/jtiberius9-spec/Wraith/releases/latest";
+
+    // --- 1) fetch release metadata ---
+    QProcess meta;
+    meta.start(curlExe, { "-sSL", "-H", "User-Agent: Wraith-Updater", api });
+    if (!meta.waitForStarted(3000)) {
+        QMessageBox::warning(this, "Wraith",
+                             tr("Could not run the updater (curl.exe not found)."),
+                             QMessageBox::Ok);
+        return;
+    }
+    meta.waitForFinished(20000);
+
+    const QByteArray data = meta.readAllStandardOutput();
+    if (data.isEmpty()) {
+        QMessageBox::warning(this, "Wraith",
+                             tr("Failed to check for updates:\n%1")
+                                 .arg(QString::fromLocal8Bit(meta.readAllStandardError()).trimmed()),
+                             QMessageBox::Ok);
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        QMessageBox::warning(this, "Wraith",
+                             tr("Failed to parse update information."),
+                             QMessageBox::Ok);
+        return;
+    }
+
+    const QJsonObject root = doc.object();
+    QString tagName = root.value("tag_name").toString();
+    if (tagName.isEmpty()) {
+        // No published release (e.g. GitHub returns 404 "Not Found"). We still
+        // reached GitHub successfully, so this is "nothing to update to".
+        QMessageBox::information(this, "Wraith",
+                                 tr("No update is available right now."),
+                                 QMessageBox::Ok);
+        return;
+    }
+
+    // Strip a leading 'v' / 'V'.
+    QString remoteVersion = tagName;
+    if (remoteVersion.startsWith('v', Qt::CaseInsensitive)) {
+        remoteVersion.remove(0, 1);
+    }
+
+    const QString localVersion = QCoreApplication::applicationVersion();
+    if (!isRemoteNewer(remoteVersion, localVersion)) {
+        QMessageBox::information(this, "Wraith", tr("You're up to date"), QMessageBox::Ok);
+        return;
+    }
+
+    // Find the first .exe asset (and its size, for the progress bar).
+    QString downloadUrl;
+    QString assetName;
+    qint64 assetSize = 0;
+    const QJsonArray assets = root.value("assets").toArray();
+    for (const QJsonValue &assetVal : assets) {
+        const QJsonObject asset = assetVal.toObject();
+        const QString name = asset.value("name").toString();
+        if (name.endsWith(".exe", Qt::CaseInsensitive)) {
+            downloadUrl = asset.value("browser_download_url").toString();
+            assetName = name;
+            assetSize = asset.value("size").toVariant().toLongLong();
+            break;
+        }
+    }
+
+    if (downloadUrl.isEmpty()) {
+        QMessageBox::warning(this, "Wraith",
+                             tr("Version %1 is available, but no installer was found.").arg(remoteVersion),
+                             QMessageBox::Ok);
+        return;
+    }
+
+    const QMessageBox::StandardButton answer = QMessageBox::question(
+        this, "Wraith",
+        tr("Version %1 is available, download and install now?").arg(remoteVersion),
+        QMessageBox::Yes | QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    // --- 2) download the installer (curl follows the GitHub CDN redirect) ---
+    const QString installerPath = QDir(QDir::tempPath()).filePath(assetName);
+    QFile::remove(installerPath);
+
+    QProcess dl;
+    dl.start(curlExe, { "-sSL", "-H", "User-Agent: Wraith-Updater",
+                        "-o", installerPath, downloadUrl });
+    if (!dl.waitForStarted(5000)) {
+        QMessageBox::warning(this, "Wraith",
+                             tr("Could not start the download."), QMessageBox::Ok);
+        return;
+    }
+
+    QProgressDialog progress(tr("Downloading %1...").arg(assetName), tr("Cancel"),
+                             0, assetSize > 0 ? 100 : 0, this);
+    progress.setWindowTitle("Wraith");
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setValue(0);
+
+    // Poll the output file size for progress while curl runs.
+    while (dl.state() != QProcess::NotRunning) {
+        if (progress.wasCanceled()) {
+            dl.kill();
+            dl.waitForFinished(2000);
+            QFile::remove(installerPath);
+            return;
+        }
+        if (assetSize > 0) {
+            const qint64 have = QFileInfo(installerPath).size();
+            progress.setValue(static_cast<int>(qBound<qint64>(0, have * 100 / assetSize, 100)));
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        dl.waitForFinished(100);
+    }
+    progress.setValue(progress.maximum());
+
+    if (dl.exitStatus() != QProcess::NormalExit || dl.exitCode() != 0) {
+        QMessageBox::warning(this, "Wraith",
+                             tr("Download failed:\n%1")
+                                 .arg(QString::fromLocal8Bit(dl.readAllStandardError()).trimmed()),
+                             QMessageBox::Ok);
+        QFile::remove(installerPath);
+        return;
+    }
+
+    const QFileInfo dlInfo(installerPath);
+    if (!dlInfo.exists() || dlInfo.size() <= 0) {
+        QMessageBox::warning(this, "Wraith",
+                             tr("The download produced no file."), QMessageBox::Ok);
+        return;
+    }
+
+    if (!QProcess::startDetached(installerPath, QStringList())) {
+        QMessageBox::warning(this, "Wraith",
+                             tr("Failed to launch the installer:\n%1").arg(installerPath),
+                             QMessageBox::Ok);
+        return;
+    }
+
+    qApp->quit();
 }

@@ -9,7 +9,7 @@ cmake_minimum_required(VERSION 3.19 FATAL_ERROR)
 # https://www.kdab.com/wp-content/uploads/stories/QTVTC20-Using-Modern-CMake-Kevin-Funk.pdf
 
 # QC Custom config
-set(QC_PROJECT_NAME "QtScrcpy")
+set(QC_PROJECT_NAME "Wraith")
 # Read version numbers from file
 file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/appversion QC_FILE_VERSION)
 set(QC_PROJECT_VERSION ${QC_FILE_VERSION})
@@ -165,6 +165,8 @@ source_group(uibase FILES ${QC_UIBASE_SOURCES})
 set(QC_AUDIO_SOURCES
     audio/audiooutput.h
     audio/audiooutput.cpp
+    audio/pcmic.h
+    audio/pcmic.cpp
 )
 source_group(audio FILES ${QC_AUDIO_SOURCES})
 
@@ -176,6 +178,8 @@ set(QC_UI_SOURCES
     ui/videoform.h
     ui/videoform.cpp
     ui/videoform.ui
+    ui/keymapeditor.h
+    ui/keymapeditor.cpp
     ui/dialog.cpp
     ui/dialog.h
     ui/dialog.ui
@@ -238,7 +242,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
         VERSION_MINOR=${PROJECT_VERSION_MINOR}
         VERSION_PATCH=${PROJECT_VERSION_PATCH}
-        VERSION_RC_STR="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}"
+        VERSION_RC_STR="${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
     )
     set(QC_PLANTFORM_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/res/${PROJECT_NAME}.rc"

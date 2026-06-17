@@ -12,6 +12,9 @@ struct UserBootConfig
     int maxSizeIndex = 0;
     int recordFormatIndex = 0;
     int lockOrientationIndex = 0;
+    int videoCodecIndex   = 0;   // 0=H.265/HEVC, 1=H.264/AVC
+    QString gameScript    = "";  // last-used keymap file name (e.g. "WWM.json")
+    double micGain        = 5.0; // record mic-gain multiplier (1.0-12.0)
     bool recordScreen     = false;
     bool recordBackground = false;
     bool reverseConnect   = true;
