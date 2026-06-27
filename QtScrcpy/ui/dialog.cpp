@@ -409,19 +409,10 @@ void Dialog::slotActivated(QSystemTrayIcon::ActivationReason reason)
 
 void Dialog::closeEvent(QCloseEvent *event)
 {
-    // The window hides to the tray on close (this is the usual "exit"), so save
-    // settings here — otherwise bitrate/resolution/codec/keymap/mic-gain/etc.
-    // would only persist on an explicit tray "quit".
     updateBootConfig(false);
-    this->hide();
-    if (!Config::getInstance().getTrayMessageShown()) {
-        Config::getInstance().setTrayMessageShown(true);
-        m_hideIcon->showMessage(tr("Notice"),
-                                tr("Hidden here!"),
-                                QSystemTrayIcon::Information,
-                                3000);
-    }
-    event->ignore();
+    m_hideIcon->hide();
+    qApp->quit();
+    event->accept();
 }
 
 void Dialog::on_updateDevice_clicked()
