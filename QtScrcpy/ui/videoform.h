@@ -3,8 +3,14 @@
 
 #include <QPointer>
 #include <QWidget>
+#include <QVector>
+#include <QString>
+#include <QRect>
+#include <QElapsedTimer>
 
 #include "../QtScrcpyCore/include/QtScrcpyCore.h"
+
+class QTimer;
 
 namespace Ui
 {
@@ -52,6 +58,7 @@ private:
                  int linesizeY, int linesizeU, int linesizeV) override;
     void updateFPS(quint32 fps) override;
     void grabCursor(bool grab) override;
+    void recoilHint(const QString &hint) override;
 
     void updateStyleSheet(bool vertical);
     QMargins getMargins(bool vertical);
@@ -66,6 +73,16 @@ private:
     void exitKeymapEditMode();
     void saveKeymapEdits();
     void updateKeymapEditorGeometry();
+
+    // Recoil editor (F8): tune recoilControl in the current keymap and trace a
+    // recoil pattern from an image, applied live via updateScript.
+    void showRecoilEditor();
+
+    // Record-the-mag: non-modal session so the game stays interactive. F8 stops.
+    void startRecoilRecording(const QString &gunName);
+    void stopRecoilRecording();
+    void recoilRecordTick();
+    void pushRecoilEnabled(bool on);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -102,6 +119,20 @@ private:
 
     // recording indicator overlay ("● REC")
     QPointer<QLabel> m_recIndicator;
+
+    // recoil recording session
+    bool m_recording = false;
+    QString m_recGun;
+    QString m_lastRecoilGun;   // editor reopens on this gun (not always the first)
+    QPointer<QLabel> m_hintOverlay;   // brief "Scope: 4x" / "Gun: ..." notifier
+    QRect m_recRegion;
+    QTimer *m_recTimer = nullptr;
+    QPointer<QLabel> m_recOverlay;
+    QElapsedTimer m_recClock;
+    QVector<double> m_recT, m_recCx, m_recCy;
+    double m_recCumX = 0.0, m_recCumY = 0.0;
+    QVector<float> m_recPrevV, m_recPrevH;
+    bool m_recHavePrev = false;
 
     //inside member
     QSize m_frameSize;
